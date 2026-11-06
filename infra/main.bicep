@@ -6,7 +6,7 @@ param location string = resourceGroup().location
 param adminUsername string = 'azureuser'
 @secure()
 param sshPublicKey string
-param vmSize string = 'Standard_B2s'
+param vmSize string = 'Standard_B2s_v2'
 
 var hubVnetName = 'vnet-hub'
 var spokeVnetName = 'vnet-spoke'

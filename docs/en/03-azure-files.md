@@ -8,6 +8,8 @@ Create an **Azure Files share** to act as the corporate file share, and mount it
 
 > 🧠 **Azure Files**: a fully managed SMB file share, mounted like a regular network drive on Windows/Linux. SMB uses **port 445**, which is often blocked on internet paths. With a Private Endpoint, traffic stays inside the VNet, so that's not an issue and nothing is exposed to the internet.
 
+> ⚠️ **Prerequisite**: this module needs a subscription where **storage account key (shared key) access is allowed**. If an organizational policy forces `allowSharedKeyAccess=false`, the mount fails with `mount error(13): Permission denied` (`STATUS_ACCESS_DENIED`). The Module 0 deploy script prints a warning in that case; you can also check with `az storage account show -g $RG -n $SA --query allowSharedKeyAccess`. Use a personal/test subscription if policy blocks it.
+
 ## 📝 Steps
 
 ```bash
@@ -87,7 +89,7 @@ az storage share-rm show -g $RG --storage-account $SA -n $SHARE \
 
 | Symptom | Fix |
 |---|---|
-| `mount error(13): Permission denied` | Check the key (`echo ${#KEY}` is normally 88) |
+| `mount error(13): Permission denied` | Check the key length (`echo ${#KEY}` is normally 88). If it still fails, check whether `allowSharedKeyAccess` is `false` (see the prerequisite above) |
 | `mount error(115)` / `Connection timed out` | Confirm the Module 1 peering is `Connected` and DNS resolves to `10.0.1.x` (Module 2) |
 | `cifs filesystem not supported` / missing `cifs-utils` | Module 0 cloud-init may not have finished: `scripts/vm-exec.sh $VM_SPOKE "cloud-init status --wait; apt-get install -y cifs-utils"` |
 | `share-rm create` fails: shared key access prohibited | An org policy blocks shared keys. Use a personal/test subscription |

@@ -30,7 +30,7 @@ If nothing is printed, run `az login --use-device-code`.
 
 ```bash
 export LOCATION=koreacentral    # default
-export VM_SIZE=Standard_B2s     # default. Pick another size on a capacity error
+export VM_SIZE=Standard_B2s_v2  # default. Pick another size on a capacity error
 ```
 
 ### 3. Deploy
@@ -63,7 +63,7 @@ You should see 2 VNets, 2 VMs (+NICs/disks), 1 storage account, 1 NSG, and `host
 
 | Symptom | Fix |
 |---|---|
-| `SkuNotAvailable` / capacity error | Set another size (`export VM_SIZE=Standard_B2s_v2`) or region (`export LOCATION=...`) and rerun |
+| `SkuNotAvailable` / capacity error | Set another size (`export VM_SIZE=Standard_B2as_v2`) or region (`export LOCATION=...`) and rerun |
 | `AuthorizationFailed` | Check you have Contributor or higher on the subscription |
 | Deployment denied by Azure Policy | An organizational policy blocks it. Use a personal/test subscription |
 

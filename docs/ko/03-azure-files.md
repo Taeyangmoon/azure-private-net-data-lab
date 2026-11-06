@@ -8,6 +8,8 @@
 
 > 🧠 **Azure Files**: 완전 관리형 SMB 파일 공유입니다. Windows/Linux에서 일반 네트워크 드라이브처럼 마운트합니다. SMB는 **445 포트**를 쓰는데, 인터넷 구간에서는 막힌 경우가 많습니다. Private Endpoint를 쓰면 VNet 내부 경로만 이용하므로 이런 문제가 없고 인터넷에 노출되지도 않습니다.
 
+> ⚠️ **전제 조건**: 이 모듈은 스토리지 **계정 키(공유 키) 액세스가 허용**된 구독이 필요합니다. 조직 정책이 `allowSharedKeyAccess=false` 를 강제하면 마운트가 `mount error(13): Permission denied` (`STATUS_ACCESS_DENIED`) 로 실패합니다. 모듈 0 배포 스크립트가 이 경우 경고를 출력하며, `az storage account show -g $RG -n $SA --query allowSharedKeyAccess` 로도 확인할 수 있습니다. 정책이 막는 구독이라면 개인/테스트 구독을 사용하세요.
+
 ## 📝 실습
 
 ```bash
@@ -87,7 +89,7 @@ az storage share-rm show -g $RG --storage-account $SA -n $SHARE \
 
 | 증상 | 해결 |
 |---|---|
-| `mount error(13): Permission denied` | 키가 올바른지 확인 (`echo ${#KEY}` 가 88이면 일반적인 키 길이) |
+| `mount error(13): Permission denied` | 키 길이 확인 (`echo ${#KEY}` 가 88이면 정상). 그래도 실패하면 `allowSharedKeyAccess` 가 `false` 인지 확인 (위 전제 조건) |
 | `mount error(115)` / `Connection timed out` | 모듈 1 피어링 `Connected`, 모듈 2 DNS 해석이 `10.0.1.x` 인지 확인 |
 | `mount error: cifs filesystem not supported` / `cifs-utils` 없음 | 모듈 0의 cloud-init이 끝나지 않았을 수 있습니다. `scripts/vm-exec.sh $VM_SPOKE "cloud-init status --wait; apt-get install -y cifs-utils"` |
 | `share-rm create` 실패: 키 접근 금지 정책 | 조직 정책이 공유 키를 막는 경우입니다. 개인/테스트 구독 사용 |

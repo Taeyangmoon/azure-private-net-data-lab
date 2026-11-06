@@ -30,7 +30,7 @@ az account show -o table
 
 ```bash
 export LOCATION=koreacentral    # 기본값
-export VM_SIZE=Standard_B2s     # 기본값. 용량 부족 오류가 나면 다른 크기를 지정
+export VM_SIZE=Standard_B2s_v2  # 기본값. 용량 부족 오류가 나면 다른 크기를 지정
 ```
 
 ### 3. 배포
@@ -63,7 +63,7 @@ VNet 2개, VM 2대(+NIC/디스크), 스토리지 계정 1개, NSG 1개가 보이
 
 | 증상 | 해결 |
 |---|---|
-| `SkuNotAvailable` / 용량 오류 | `export VM_SIZE=Standard_B2s_v2` 처럼 다른 크기, 또는 `export LOCATION=` 으로 다른 리전을 지정하고 다시 실행 |
+| `SkuNotAvailable` / 용량 오류 | `export VM_SIZE=Standard_B2as_v2` 처럼 다른 크기, 또는 `export LOCATION=` 으로 다른 리전을 지정하고 다시 실행 |
 | 권한 오류 (`AuthorizationFailed`) | 구독에 Contributor 이상 권한이 있는지 확인 |
 | 정책(Policy)으로 배포 거부 | 조직 정책이 막는 경우입니다. 개인/테스트 구독을 사용하세요 |
 

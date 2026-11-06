@@ -21,6 +21,9 @@ source scripts/env.sh
 ### 1. Create the vault
 
 ```bash
+# Only needed the first time in a subscription (instant if Module 0's script already did it)
+az provider register -n Microsoft.RecoveryServices --wait
+
 az backup vault create -g $RG -n $VAULT -l $LOCATION -o none
 
 # Lab cost/cleanup convenience: LRS redundancy, soft delete off (※ keep it ON in production)
@@ -30,7 +33,7 @@ az backup vault backup-properties set -g $RG -n $VAULT \
   --soft-delete-feature-state Disable -o none
 ```
 
-> ⚠️ Redundancy (LRS/GRS) can only be changed **before registering any protected item**. With soft delete on, backup data lingers for 14 days after deletion, so you couldn't delete the vault right away during cleanup.
+> ⚠️ Redundancy (LRS/GRS) can only be changed **before registering any protected item**. With soft delete on, backup data can linger for 14 days after deletion, which may block deleting the vault during cleanup. Depending on your subscription/policy you may see `Vault's current Soft Delete State is AlwaysOn. This cannot be modified.` — that's fine, just continue.
 
 ### 2. Create a backup policy
 
@@ -130,6 +133,7 @@ scripts/vm-share.sh "ls -l /mnt/corpfiles/finance; cat /mnt/corpfiles/finance/bu
 
 | Symptom | Fix |
 |---|---|
+| `MissingSubscriptionRegistration` | Run `az provider register -n Microsoft.RecoveryServices --wait` and retry |
 | `date -d` error (e.g. macOS) | Works in the Codespace (Linux). Otherwise pass e.g. `--retain-until 31-12-2030` (`d-m-Y`) |
 | Storage access error when enabling protection | Check Module 2's `--bypass AzureServices` is applied: `az storage account show -g $RG -n $SA --query networkRuleSet.bypass` |
 | `backup-properties set` error | Redundancy can't change once an item is protected. Use a freshly created vault |

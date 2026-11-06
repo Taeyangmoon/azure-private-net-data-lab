@@ -57,7 +57,10 @@ az network vnet peering list -g $RG --vnet-name $SPOKE_VNET \
 
 ### 4. 피어링 후: 연결 테스트
 
+> ⏱️ 피어링이 `Connected` 가 된 뒤에도 경로 전파에 **30초~1분** 걸릴 수 있습니다. 첫 ping이 실패하면 잠시 후 다시 실행하세요.
+
 ```bash
+sleep 30
 scripts/vm-exec.sh $VM_SPOKE "ping -c 3 -W 2 $HUB_IP"
 scripts/vm-exec.sh $VM_HUB   "ping -c 3 -W 2 $SPOKE_IP"
 ```
@@ -70,10 +73,10 @@ scripts/vm-exec.sh $VM_HUB   "ping -c 3 -W 2 $SPOKE_IP"
 
 ```bash
 az network nic show-effective-route-table -g $RG -n nic-vm-spoke \
-  --query "value[].{출처:source, 대상:addressPrefix[0], 다음홉:nextHopType}" -o table
+  --query "value[?nextHopType=='VNetPeering' || nextHopType=='VnetLocal'].{대상:addressPrefix[0], 다음홉:nextHopType}" -o table
 ```
 
-`VNetPeering` 출처로 `10.0.0.0/16` 이 보이면 됩니다.
+다음 홉이 `VNetPeering` 인 `10.0.0.0/16` 이 보이면 됩니다.
 
 ## ✅ 확인 체크리스트
 
@@ -86,7 +89,7 @@ az network nic show-effective-route-table -g $RG -n nic-vm-spoke \
 | 증상 | 해결 |
 |---|---|
 | 상태가 `Initiated` | 반대 방향(`hub-to-spoke`)을 만들었는지 확인 |
-| 피어링 후에도 ping 실패 | 몇십 초 기다린 뒤 재시도. `HUB_IP`/`SPOKE_IP` 변수가 비어 있지 않은지 확인 (`echo $HUB_IP`) |
+| 피어링 후에도 ping 실패 | 1분 정도 기다린 뒤 재시도 (경로 전파 지연). `HUB_IP`/`SPOKE_IP` 변수가 비어 있지 않은지 확인 (`echo $HUB_IP`) |
 | `AddressSpaceOverlap` | 두 VNet 주소 공간이 겹치는 경우. 이 랩 기본값은 겹치지 않습니다 |
 
 ➡️ 다음: [모듈 2. Private Endpoint](02-private-endpoint.md)

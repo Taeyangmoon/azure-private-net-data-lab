@@ -57,7 +57,10 @@ az network vnet peering list -g $RG --vnet-name $SPOKE_VNET \
 
 ### 4. After peering: connectivity test
 
+> ⏱️ Even once `Connected`, route propagation can take **30 s – 1 min**. If the first ping fails, wait a bit and rerun.
+
 ```bash
+sleep 30
 scripts/vm-exec.sh $VM_SPOKE "ping -c 3 -W 2 $HUB_IP"
 scripts/vm-exec.sh $VM_HUB   "ping -c 3 -W 2 $SPOKE_IP"
 ```
@@ -70,10 +73,10 @@ Once peered, the hub's address range is added automatically to the spoke NIC's e
 
 ```bash
 az network nic show-effective-route-table -g $RG -n nic-vm-spoke \
-  --query "value[].{Source:source, Prefix:addressPrefix[0], NextHop:nextHopType}" -o table
+  --query "value[?nextHopType=='VNetPeering' || nextHopType=='VnetLocal'].{Prefix:addressPrefix[0], NextHop:nextHopType}" -o table
 ```
 
-Look for `10.0.0.0/16` with source `VNetPeering`.
+Look for `10.0.0.0/16` with next hop `VNetPeering`.
 
 ## ✅ Checklist
 
@@ -86,7 +89,7 @@ Look for `10.0.0.0/16` with source `VNetPeering`.
 | Symptom | Fix |
 |---|---|
 | State is `Initiated` | Make sure you created the other direction (`hub-to-spoke`) |
-| Ping still fails after peering | Wait a few dozen seconds and retry. Make sure `HUB_IP`/`SPOKE_IP` aren't empty (`echo $HUB_IP`) |
+| Ping still fails after peering | Wait about a minute and retry (route propagation delay). Make sure `HUB_IP`/`SPOKE_IP` aren't empty (`echo $HUB_IP`) |
 | `AddressSpaceOverlap` | The VNet address spaces overlap. The lab defaults don't |
 
 ➡️ Next: [Module 2. Private Endpoint](02-private-endpoint.md)

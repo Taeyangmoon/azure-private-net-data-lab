@@ -42,6 +42,7 @@ flowchart LR
 
 - **Azure subscription** with permission to create resource groups (**Contributor or higher**).
 - **GitHub account** for Codespaces (the free quota is enough).
+- **Shared key access allowed**: the Module 3 mount authenticates with the account key. It fails in subscriptions where policy disables keys, so a personal/test subscription is recommended.
 - **Region**: defaults to `koreacentral`. To change it, run e.g. `export LOCATION=westeurope` before Module 0.
 
 ## 🚀 Getting started
@@ -59,7 +60,20 @@ flowchart LR
 
 ## 💰 Cost
 
-Two small VMs (`Standard_B2s`) and a little storage: roughly **US$1–2 or less per run**. But **VMs and Private Endpoints bill while they exist**, so always finish with [Cleanup](docs/en/05-cleanup.md). (Check the Azure pricing calculator for current prices.)
+Two small VMs (`Standard_B2s_v2`) and a little storage: roughly **US$1–2 or less per run**. But **VMs and Private Endpoints bill while they exist**, so always finish with [Cleanup](docs/en/05-cleanup.md). (Check the Azure pricing calculator for current prices.)
+
+## 🧪 Verification status
+
+The following was run for real in an Azure subscription (koreacentral).
+
+| Module | Result |
+|---|---|
+| 0. Setup | ✅ Deployed (`Standard_B2s_v2`) |
+| 1. Peering | ✅ 100% loss before → 0% after (~1 min route propagation) |
+| 2. Private Endpoint | ✅ VM `10.0.1.4` / internet public IP; after blocking: internet 403, VM 401 |
+| 3. Azure Files | ⚠️ Share creation ✅ / SMB mount **needs a subscription that allows shared key access** (fails where policy disables keys) |
+| 4. Azure Backup | ✅ Vault, policy, protection, on-demand backup, share restore (works with public access blocked) / ⚠️ file-level restore after deleting a file couldn't be reproduced because of the mount limitation |
+| Cleanup | ✅ `scripts/99-cleanup.sh` removed everything including the resource group |
 
 ## 🧩 Intentional simplifications
 

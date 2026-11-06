@@ -102,44 +102,46 @@ nslookup $SA.file.core.windows.net
 
 ### 6. Block public access 🚫
 
-First confirm the Codespace can still reach the storage account.
+To check without an account key, send an **unauthenticated** request to the storage file endpoint and compare the response codes.
 
 ```bash
-KEY=$(az storage account keys list -g $RG -n $SA --query '[0].value' -o tsv)
-az storage share list --account-name $SA --account-key $KEY -o table   # succeeds (empty list)
+# From the internet (Codespace)
+curl -s -i -H "x-ms-version: 2023-11-03" "https://$SA.file.core.windows.net/?comp=list" | grep -iE "^HTTP|x-ms-error-code"
 ```
+
+👉 **Before blocking** you get `401 ... NoAuthenticationInformation`: the request reached the service but carried no credentials.
 
 Now set the firewall's default action to **Deny**.
 
 ```bash
 az storage account update -g $RG -n $SA \
   --default-action Deny --bypass AzureServices -o none
+sleep 45        # wait for the rule to apply (up to 1 min)
+curl -s -i -H "x-ms-version: 2023-11-03" "https://$SA.file.core.windows.net/?comp=list" | grep -iE "^HTTP|x-ms-error-code"
 ```
+
+👉 **`403 ... AuthorizationFailure`** means success: the service **rejected the internet request before authentication**. 🔒
 
 > 🧠 `--default-action Deny` rejects all public access not on an allow list. The Private Endpoint path isn't subject to firewall rules, so it keeps working.
 > `--bypass AzureServices` lets trusted Microsoft services such as Azure Backup through (needed in Module 4).
 
-Rules can take up to a minute to apply. Try again shortly:
-
-```bash
-sleep 30
-az storage share list --account-name $SA --account-key $KEY -o table
-```
-
-👉 Getting **`403 AuthorizationFailure` / `This request is not authorized to perform this operation`** means success. Even with the key, the internet can't get in. 🔒
+> ℹ️ Some subscriptions use policy to pin `publicNetworkAccess` to `Disabled`. You'll then see 403 even before this step; the end result (403) is the same.
 
 ### 7. Confirm the VM still works
 
 ```bash
 scripts/vm-exec.sh $VM_SPOKE "timeout 5 bash -c '</dev/tcp/$SA.file.core.windows.net/445' && echo '✅ port 445 reachable (private path)'"
+scripts/vm-exec.sh $VM_SPOKE "curl -s -i -H 'x-ms-version: 2023-11-03' 'https://$SA.file.core.windows.net/?comp=list' | grep -iE '^HTTP|x-ms-error-code'"
 ```
+
+👉 The same request gets **`401 NoAuthenticationInformation`** from the VM (it reached the service) and **`403 AuthorizationFailure`** from the internet (blocked). That's the Private Endpoint at work.
 
 ## ✅ Checklist
 
 - [ ] Before: both VM and Codespace see a public IP
 - [ ] After: VM sees `10.0.1.x`, Codespace still sees a public IP
-- [ ] After blocking: `az storage share list` from the Codespace returns 403
-- [ ] After blocking: port 445 from the VM succeeds
+- [ ] After blocking: `curl` from the Codespace returns `403 AuthorizationFailure`
+- [ ] After blocking: port 445 from the VM succeeds and `curl` returns `401`
 
 ## 🛠️ Troubleshooting
 

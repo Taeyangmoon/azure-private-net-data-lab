@@ -21,6 +21,9 @@ source scripts/env.sh
 ### 1. 자격 증명 모음 만들기
 
 ```bash
+# 구독에서 처음 쓰는 경우에만 필요 (모듈 0 스크립트가 이미 실행했다면 바로 끝남)
+az provider register -n Microsoft.RecoveryServices --wait
+
 az backup vault create -g $RG -n $VAULT -l $LOCATION -o none
 
 # 랩 비용·정리 편의: 중복성을 LRS로, 소프트 삭제를 끔 (※ 운영에서는 켜 두세요)
@@ -30,7 +33,7 @@ az backup vault backup-properties set -g $RG -n $VAULT \
   --soft-delete-feature-state Disable -o none
 ```
 
-> ⚠️ 중복성(LRS/GRS)은 **보호 항목을 등록하기 전**에만 바꿀 수 있습니다. 소프트 삭제를 켜 두면 백업 삭제 후에도 14일간 데이터가 남아 정리 시 자격 증명 모음을 바로 지울 수 없습니다.
+> ⚠️ 중복성(LRS/GRS)은 **보호 항목을 등록하기 전**에만 바꿀 수 있습니다. 소프트 삭제를 켜 두면 백업 삭제 후에도 14일간 데이터가 남아 정리 시 자격 증명 모음을 바로 지울 수 없을 수 있습니다. 구독/정책에 따라 `Vault's current Soft Delete State is AlwaysOn. This cannot be modified.` 경고가 나올 수 있는데, 그대로 진행해도 됩니다.
 
 ### 2. 백업 정책 만들기
 
@@ -130,6 +133,7 @@ scripts/vm-share.sh "ls -l /mnt/corpfiles/finance; cat /mnt/corpfiles/finance/bu
 
 | 증상 | 해결 |
 |---|---|
+| `MissingSubscriptionRegistration` | `az provider register -n Microsoft.RecoveryServices --wait` 실행 후 재시도 |
 | `date -d` 오류 (macOS 등) | Codespace(Linux)에서는 정상입니다. 직접 `--retain-until 31-12-2030` 처럼 `일-월-년` 으로 지정 |
 | 보호 설정 시 스토리지 접근 오류 | 모듈 2의 `--bypass AzureServices` 가 적용됐는지 확인: `az storage account show -g $RG -n $SA --query networkRuleSet.bypass` |
 | `backup-properties set` 오류 | 이미 보호 항목이 있으면 중복성을 바꿀 수 없습니다. 새로 만든 자격 증명 모음에서 진행 |

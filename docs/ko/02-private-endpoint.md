@@ -102,44 +102,46 @@ nslookup $SA.file.core.windows.net
 
 ### 6. 공용 액세스 차단 🚫
 
-먼저 차단 전에 Codespace에서 접근이 되는지 확인합니다.
+계정 키 없이도 확인할 수 있도록, 스토리지의 파일 엔드포인트에 **인증 없이** 요청을 보내 응답 코드를 비교합니다.
 
 ```bash
-KEY=$(az storage account keys list -g $RG -n $SA --query '[0].value' -o tsv)
-az storage share list --account-name $SA --account-key $KEY -o table   # 성공 (빈 목록)
+# 인터넷(Codespace)에서
+curl -s -i -H "x-ms-version: 2023-11-03" "https://$SA.file.core.windows.net/?comp=list" | grep -iE "^HTTP|x-ms-error-code"
 ```
+
+👉 **차단 전**에는 `401 ... NoAuthenticationInformation` 이 나옵니다. 서비스에는 도달했지만 인증 정보가 없다는 뜻입니다.
 
 이제 방화벽 기본 동작을 **거부**로 바꿉니다.
 
 ```bash
 az storage account update -g $RG -n $SA \
   --default-action Deny --bypass AzureServices -o none
+sleep 45        # 규칙 반영 대기 (최대 1분)
+curl -s -i -H "x-ms-version: 2023-11-03" "https://$SA.file.core.windows.net/?comp=list" | grep -iE "^HTTP|x-ms-error-code"
 ```
+
+👉 **`403 ... AuthorizationFailure`** 가 나오면 성공입니다. 서비스가 인터넷에서 온 요청을 **인증 이전에 차단**했습니다. 🔒
 
 > 🧠 `--default-action Deny`: 허용 목록에 없는 공용 접근을 모두 거부합니다. Private Endpoint 경로는 방화벽 규칙의 영향을 받지 않아 계속 동작합니다.
 > `--bypass AzureServices`: Azure Backup 같은 신뢰할 수 있는 Microsoft 서비스는 허용합니다. (모듈 4에서 필요)
 
-규칙이 반영되는 데 최대 1분 정도 걸립니다. 잠시 후 다시 시도합니다.
-
-```bash
-sleep 30
-az storage share list --account-name $SA --account-key $KEY -o table
-```
-
-👉 **`403 AuthorizationFailure` / `This request is not authorized to perform this operation`** 오류가 나면 성공입니다. 키를 갖고 있어도 인터넷에서는 접근할 수 없습니다. 🔒
+> ℹ️ 일부 구독은 정책으로 `publicNetworkAccess` 를 이미 `Disabled` 로 고정합니다. 이 경우 차단 전에도 403이 나오며, 결과(403)는 같습니다.
 
 ### 7. VM에서는 여전히 되는지 확인
 
 ```bash
 scripts/vm-exec.sh $VM_SPOKE "timeout 5 bash -c '</dev/tcp/$SA.file.core.windows.net/445' && echo '✅ 445 포트 연결 성공 (프라이빗 경로)'"
+scripts/vm-exec.sh $VM_SPOKE "curl -s -i -H 'x-ms-version: 2023-11-03' 'https://$SA.file.core.windows.net/?comp=list' | grep -iE '^HTTP|x-ms-error-code'"
 ```
+
+👉 같은 요청이 VM에서는 **`401 NoAuthenticationInformation`** (서비스에 도달함), 인터넷에서는 **`403 AuthorizationFailure`** (차단됨)입니다. 이게 Private Endpoint의 효과입니다.
 
 ## ✅ 확인 체크리스트
 
 - [ ] 변경 전: VM·Codespace 모두 공용 IP
 - [ ] 변경 후: VM은 `10.0.1.x`, Codespace는 공용 IP
-- [ ] 공용 차단 후: Codespace에서 `az storage share list` 가 403
-- [ ] 공용 차단 후: VM에서 445 포트 연결 성공
+- [ ] 공용 차단 후: Codespace의 `curl` 이 `403 AuthorizationFailure`
+- [ ] 공용 차단 후: VM에서 445 포트 연결 성공, `curl` 은 `401`
 
 ## 🛠️ 문제 해결
 
