@@ -1,15 +1,15 @@
-# 모듈 2. Private Endpoint (약 25분)
+# 모듈 2. Private Endpoint (약 20분)
 
 🌐 **한국어** | [English](../en/02-private-endpoint.md)  ·  [← 처음으로](../../README.md)
 
 ## 🎯 목표
 
-스토리지 계정에 **Private Endpoint**를 만들어 사설 IP로만 접근하게 하고, **공용 접근을 차단**합니다. 그리고 `nslookup` 결과가 어떻게 달라지는지 비교합니다.
+공용 접근이 이미 차단된 스토리지 계정에 **Private Endpoint**를 연결합니다. `nslookup` 결과와 **인터넷 403 · VM 401** 응답을 비교해 프라이빗 경로를 이해합니다.
 
 > 🧠 **핵심 개념**
 > - **Private Endpoint**: VNet 안에 만드는 사설 IP(NIC). 이 IP가 Azure 서비스(여기서는 스토리지의 `file`)로 연결되는 **Private Link** 입구입니다.
 > - **프라이빗 DNS 영역** `privatelink.file.core.windows.net`: `계정이름.file.core.windows.net` 을 **공용 IP 대신 사설 IP**로 해석하게 만듭니다. 이게 없으면 VM은 계속 공용 IP로 접속을 시도합니다.
-> - **공용 액세스 차단**: Private Endpoint를 만들어도 공용 경로는 열려 있습니다. 방화벽으로 막아야 데이터가 인터넷에 노출되지 않습니다.
+> - **공용 액세스 차단**: 모듈 0에서 `publicNetworkAccess=Disabled`로 배포했습니다. 이 설정과 공유 키 차단은 실습 내내 유지하며, 비교를 위해 공용 접근을 켜지 않습니다.
 
 ```mermaid
 flowchart LR
@@ -23,6 +23,7 @@ flowchart LR
 ```bash
 source scripts/env.sh
 echo $SA        # 비어 있으면 모듈 0을 다시 확인
+: "${SA:?모듈 0을 먼저 배포하세요}"
 ```
 
 ### 1. 변경 전: `nslookup` 결과 기록 📸
@@ -40,6 +41,13 @@ nslookup $SA.file.core.windows.net
 ```
 
 👉 둘 다 **공용 IP**(예: `20.x.x.x`, `52.x.x.x`)가 나옵니다. 이 결과를 기억해 두세요.
+
+> 📌 **공용 IP로 이름이 해석되는 것과 공용 데이터 접근이 허용되는 것은 다릅니다.** 이 시점에도 인터넷 요청은 아래처럼 `403 AuthorizationFailure`입니다.
+
+```bash
+curl -sS --max-time 30 -i -H "x-ms-version: 2023-11-03" \
+  "https://$SA.file.core.windows.net/?comp=list" | grep -iE "^HTTP|x-ms-error-code"
+```
 
 ### 2. 프라이빗 DNS 영역 만들고 VNet에 연결
 
@@ -81,7 +89,7 @@ az network private-endpoint dns-zone-group create -g $RG \
 
 ```bash
 az network private-dns record-set a list -g $RG -z $DNS_ZONE \
-  --query "[].{이름:name, IP:aRecords[0].ipv4Address}" -o table
+  --query "[].{Name:name, IP:aRecords[0].ipv4Address}" -o table
 ```
 
 👉 `$SA` 이름으로 `10.0.1.x` 사설 IP가 등록되어 있어야 합니다.
@@ -98,60 +106,45 @@ nslookup $SA.file.core.windows.net
 | **VM (스포크)** | `...privatelink.file.core.windows.net` 별칭 → **10.0.1.x** (사설 IP) | VNet에 연결된 프라이빗 DNS 영역이 응답 |
 | **Codespace (인터넷)** | 여전히 **공용 IP** | 프라이빗 DNS 영역이 연결되지 않은 곳은 공용 DNS를 사용 |
 
-> ⚠️ 이 시점에서도 Codespace → 스토리지 공용 경로는 **아직 열려 있습니다.** 다음 단계에서 막습니다.
+### 6. 인터넷과 VM의 응답 비교 🔍
 
-### 6. 공용 액세스 차단 🚫
-
-계정 키 없이도 확인할 수 있도록, 스토리지의 파일 엔드포인트에 **인증 없이** 요청을 보내 응답 코드를 비교합니다.
+인증 없이 같은 요청을 보내 **접근 경로만** 확인합니다. 인터넷의 공용 데이터 접근은 처음부터 차단되어 있습니다.
 
 ```bash
 # 인터넷(Codespace)에서
-curl -s -i -H "x-ms-version: 2023-11-03" "https://$SA.file.core.windows.net/?comp=list" | grep -iE "^HTTP|x-ms-error-code"
+curl -sS --max-time 30 -i -H "x-ms-version: 2023-11-03" \
+  "https://$SA.file.core.windows.net/?comp=list" | grep -iE "^HTTP|x-ms-error-code"
+scripts/vm-exec.sh $VM_SPOKE "curl -sS --max-time 30 -i -H 'x-ms-version: 2023-11-03' 'https://$SA.file.core.windows.net/?comp=list' | grep -iE '^HTTP|x-ms-error-code'"
 ```
 
-👉 **차단 전**에는 `401 ... NoAuthenticationInformation` 이 나옵니다. 서비스에는 도달했지만 인증 정보가 없다는 뜻입니다.
+| 위치 | 응답 | 의미 |
+|---|---|---|
+| 인터넷 | `403 AuthorizationFailure` | 공용 데이터 접근 차단 |
+| VM | `401 NoAuthenticationInformation` | 프라이빗 경로로 서비스에 도달했지만 인증 정보 없음 |
 
-이제 방화벽 기본 동작을 **거부**로 바꿉니다.
+> 📌 **401은 파일 읽기·쓰기 성공이 아닙니다.** 네트워크 연결과 데이터 인증은 별도이며, 파일 데이터 인증은 기본 실습 범위가 아닙니다.
 
-```bash
-az storage account update -g $RG -n $SA \
-  --default-action Deny --bypass AzureServices -o none
-sleep 45        # 규칙 반영 대기 (최대 1분)
-curl -s -i -H "x-ms-version: 2023-11-03" "https://$SA.file.core.windows.net/?comp=list" | grep -iE "^HTTP|x-ms-error-code"
-```
-
-👉 **`403 ... AuthorizationFailure`** 가 나오면 성공입니다. 서비스가 인터넷에서 온 요청을 **인증 이전에 차단**했습니다. 🔒
-
-> 🧠 `--default-action Deny`: 허용 목록에 없는 공용 접근을 모두 거부합니다. Private Endpoint 경로는 방화벽 규칙의 영향을 받지 않아 계속 동작합니다.
-> `--bypass AzureServices`: Azure Backup 같은 신뢰할 수 있는 Microsoft 서비스는 허용합니다. (모듈 4에서 필요)
-
-> ℹ️ 일부 구독은 정책으로 `publicNetworkAccess` 를 이미 `Disabled` 로 고정합니다. 이 경우 차단 전에도 403이 나오며, 결과(403)는 같습니다.
-
-### 7. VM에서는 여전히 되는지 확인
+### 7. SMB 포트의 네트워크 연결 확인
 
 ```bash
 scripts/vm-exec.sh $VM_SPOKE "timeout 5 bash -c '</dev/tcp/$SA.file.core.windows.net/445' && echo '✅ 445 포트 연결 성공 (프라이빗 경로)'"
-scripts/vm-exec.sh $VM_SPOKE "curl -s -i -H 'x-ms-version: 2023-11-03' 'https://$SA.file.core.windows.net/?comp=list' | grep -iE '^HTTP|x-ms-error-code'"
 ```
 
-👉 같은 요청이 VM에서는 **`401 NoAuthenticationInformation`** (서비스에 도달함), 인터넷에서는 **`403 AuthorizationFailure`** (차단됨)입니다. 이게 Private Endpoint의 효과입니다.
+👉 TCP 445 연결은 성공하지만 SMB 마운트·인증을 시도하지는 않습니다. 공유 키가 차단된 정책을 그대로 유지합니다.
 
 ## ✅ 확인 체크리스트
 
 - [ ] 변경 전: VM·Codespace 모두 공용 IP
 - [ ] 변경 후: VM은 `10.0.1.x`, Codespace는 공용 IP
-- [ ] 공용 차단 후: Codespace의 `curl` 이 `403 AuthorizationFailure`
-- [ ] 공용 차단 후: VM에서 445 포트 연결 성공, `curl` 은 `401`
+- [ ] 처음부터 끝까지: Codespace의 `curl` 이 `403 AuthorizationFailure`
+- [ ] 프라이빗 경로 구성 후: VM에서 445 포트 연결 성공, `curl` 은 `401`
 
 ## 🛠️ 문제 해결
 
 | 증상 | 해결 |
 |---|---|
 | VM에서 여전히 공용 IP | DNS 영역이 **스포크 VNet에도** 연결됐는지 (`az network private-dns link vnet list -g $RG -z $DNS_ZONE -o table`), dns-zone-group을 만들었는지 확인. 1~2분 후 재시도 |
-| 차단했는데 Codespace에서 계속 성공 | 규칙 반영 지연입니다. 1분 뒤 재시도 |
+| Codespace에서 401이 나옴 | 모듈 0의 `publicNetworkAccess=Disabled`, `defaultAction=Deny` 설정인지 확인하세요. 비교를 위해 공용 접근을 켜지 마세요 |
 | VM에서 445 연결 실패 | 모듈 1의 피어링이 `Connected` 인지 확인 |
-| 구독 정책으로 `--default-action` 변경 거부 | 정책 예외가 필요한 환경입니다. 개인/테스트 구독 사용 |
-
-> 💡 더 엄격하게 `--public-network-access Disabled` 로 공용 엔드포인트 자체를 끌 수도 있습니다. 다만 Azure Backup 등 서비스와의 호환성을 먼저 확인하세요. 이 랩은 `Deny + AzureServices 예외` 방식을 사용합니다.
 
 ➡️ 다음: [모듈 3. Azure Files](03-azure-files.md)

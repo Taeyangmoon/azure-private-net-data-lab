@@ -32,6 +32,8 @@ scripts/vm-exec.sh $VM_SPOKE "ping -c 3 -W 2 $HUB_IP"
 
 👉 `100% packet loss` 가 나옵니다. VNet이 서로 연결되어 있지 않기 때문입니다.
 
+이 단계의 종료 코드 `1`은 예상된 ping 실패입니다. 이후의 피어링 후 테스트는 종료 코드 `0`이어야 합니다.
+
 ### 2. 피어링 생성 (양방향)
 
 ```bash
@@ -50,10 +52,10 @@ az network vnet peering create -g $RG -n hub-to-spoke \
 
 ```bash
 az network vnet peering list -g $RG --vnet-name $SPOKE_VNET \
-  --query "[].{이름:name, 상태:peeringState, 원격:remoteVirtualNetwork.id}" -o table
+  --query "[].{Name:name, State:peeringState, Remote:remoteVirtualNetwork.id}" -o table
 ```
 
-👉 `상태`가 **Connected** 여야 합니다. (`Initiated` 이면 반대 방향 피어링이 없는 것입니다)
+👉 `State`가 **Connected** 여야 합니다. (`Initiated` 이면 반대 방향 피어링이 없는 것입니다)
 
 ### 4. 피어링 후: 연결 테스트
 
@@ -73,7 +75,7 @@ scripts/vm-exec.sh $VM_HUB   "ping -c 3 -W 2 $SPOKE_IP"
 
 ```bash
 az network nic show-effective-route-table -g $RG -n nic-vm-spoke \
-  --query "value[?nextHopType=='VNetPeering' || nextHopType=='VnetLocal'].{대상:addressPrefix[0], 다음홉:nextHopType}" -o table
+  --query "value[?nextHopType=='VNetPeering' || nextHopType=='VnetLocal'].{Prefix:addressPrefix[0], NextHop:nextHopType}" -o table
 ```
 
 다음 홉이 `VNetPeering` 인 `10.0.0.0/16` 이 보이면 됩니다.

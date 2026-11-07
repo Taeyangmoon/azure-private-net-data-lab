@@ -1,24 +1,25 @@
-# Module 3. Azure Files (~15 min)
+# Module 3. Azure Files (~10 min)
 
 🌐 [한국어](../ko/03-azure-files.md) | **English**  ·  [← Home](../../README.en.md)
 
 ## 🎯 Goal
 
-Create an **Azure Files share** to act as the corporate file share, and mount it on the spoke VM over the **private path (Private Endpoint)**.
+Create an **Azure Files share** while public data access is disabled, then inspect its quota and protocol. Understand that **resource management and file data access are separate**.
 
-> 🧠 **Azure Files**: a fully managed SMB file share, mounted like a regular network drive on Windows/Linux. SMB uses **port 445**, which is often blocked on internet paths. With a Private Endpoint, traffic stays inside the VNet, so that's not an issue and nothing is exposed to the internet.
+> 🧠 **Azure Files** is a managed file share. You configure an SMB share here, but do not mount it or read/write files. TCP 445 connectivity from Module 2 proves network reachability, not successful file authentication.
 
-> ⚠️ **Prerequisite**: this module needs a subscription where **storage account key (shared key) access is allowed**. If an organizational policy forces `allowSharedKeyAccess=false`, the mount fails with `mount error(13): Permission denied` (`STATUS_ACCESS_DENIED`). The Module 0 deploy script prints a warning in that case; you can also check with `az storage account show -g $RG -n $SA --query allowSharedKeyAccess`. Use a personal/test subscription if policy blocks it.
+Do not enable shared keys or create policy exemptions. The `share-rm` management-plane API does not require retrieving account keys in the lab commands.
 
 ## 📝 Steps
 
 ```bash
 source scripts/env.sh
+: "${SA:?Deploy Module 0 first}"
 ```
 
 ### 1. Create the file share
 
-Because you blocked public access in Module 2, data-plane calls such as `az storage share create` fail from the Codespace. Use `share-rm`, which goes through the **management plane (ARM)**.
+Public data access is disabled, so use `share-rm` through the **management plane (ARM)**.
 
 ```bash
 az storage share-rm create -g $RG --storage-account $SA -n $SHARE \
@@ -27,71 +28,45 @@ az storage share-rm create -g $RG --storage-account $SA -n $SHARE \
 
 > 💡 Management vs data plane: creating/configuring resources (management) isn't affected by the firewall; only reading/writing files (data) is subject to the firewall / Private Endpoint.
 
-### 2. Configure the mount on the VM
-
-> ⚠️ For simplicity this lab authenticates with the **storage account key**. In production prefer identity-based auth (Microsoft Entra Kerberos).
-
-```bash
-KEY=$(az storage account keys list -g $RG -n $SA --query '[0].value' -o tsv)
-
-scripts/vm-exec.sh $VM_SPOKE "
-set -e
-mkdir -p /mnt/corpfiles /etc/smbcredentials
-printf 'username=$SA\npassword=$KEY\n' > /etc/smbcredentials/$SA.cred
-chmod 600 /etc/smbcredentials/$SA.cred
-grep -q corpfiles /etc/fstab || echo '//$SA.file.core.windows.net/$SHARE /mnt/corpfiles cifs nofail,credentials=/etc/smbcredentials/$SA.cred,dir_mode=0777,file_mode=0777,serverino,nosharesock,actimeo=30,vers=3.1.1 0 0' >> /etc/fstab
-systemctl daemon-reload
-mount /mnt/corpfiles
-df -h /mnt/corpfiles
-"
-```
-
-👉 If `df` shows `//stpvtlab....file.core.windows.net/corpfiles` with 5.0G, the mount worked.
-
-> 🧠 Because it's in `/etc/fstab`, the share re-mounts after a reboot. (Each `az vm run-command` call is a fresh session, so `scripts/vm-share.sh` checks the mount and mounts it if needed.)
-
-### 3. Verify it uses the private path 🔍
-
-```bash
-scripts/vm-share.sh "grep corpfiles /proc/mounts | tr ',' '\n' | grep -E 'addr=|^//'"
-```
-
-👉 `addr=10.0.1.x` — the **Private Endpoint's private IP** from Module 2, not a public IP!
-
-### 4. Create some fake corporate files
-
-```bash
-scripts/vm-share.sh "
-mkdir -p /mnt/corpfiles/finance /mnt/corpfiles/hr
-echo '2026 budget - confidential' > /mnt/corpfiles/finance/budget-2026.txt
-echo 'HR policy v1.0'             > /mnt/corpfiles/hr/policy.txt
-echo 'Meeting notes 2026-01-05'   > /mnt/corpfiles/meeting-notes.txt
-ls -lR /mnt/corpfiles
-"
-```
-
-### 5. See it from Azure too (management plane)
+### 2. Inspect share settings
 
 ```bash
 az storage share-rm show -g $RG --storage-account $SA -n $SHARE \
   --query "{Name:name, QuotaGiB:shareQuota, Protocols:enabledProtocols}" -o table
 ```
 
-> 📌 Listing files from the Codespace with `az storage file list` returns **403**. That's expected: public access is blocked. Files are only visible from inside the VNet (the VM). 🔒
+👉 Expect `corpfiles`, `5` GiB, and `SMB`. This is an **empty share** with no files yet.
+
+### 3. Confirm security settings are unchanged
+
+```bash
+az storage account show -g $RG -n $SA \
+  --query "{SharedKey:allowSharedKeyAccess, PublicAccess:publicNetworkAccess, DefaultAction:networkRuleSet.defaultAction}" -o table
+```
+
+👉 Settings remain `false / Disabled / Deny`. Creating a share did not open data access.
+
+| Operation | Access path | Lab result |
+|---|---|---|
+| Create share / inspect settings | ARM management plane | Succeeds with your Azure login permissions |
+| Internet request to file service | Public data path | Module 2 confirmed 403 |
+| VM request to file service | Private Endpoint | Module 2 confirmed private IP / 401 |
+| Read/write actual files | Requires data authentication | Omitted from the basic lab |
 
 ## ✅ Checklist
 
-- [ ] The share shows up in `df -h`
-- [ ] `addr=` in `/proc/mounts` is `10.0.1.x`
-- [ ] 3 sample files were created
+- [ ] Share `corpfiles` exists with `5` GiB quota and `SMB` protocol
+- [ ] Shared keys and public data access remain disabled
+- [ ] Understand management-plane success vs. data-plane restrictions
 
 ## 🛠️ Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `mount error(13): Permission denied` | Check the key length (`echo ${#KEY}` is normally 88). If it still fails, check whether `allowSharedKeyAccess` is `false` (see the prerequisite above) |
-| `mount error(115)` / `Connection timed out` | Confirm the Module 1 peering is `Connected` and DNS resolves to `10.0.1.x` (Module 2) |
-| `cifs filesystem not supported` / missing `cifs-utils` | Module 0 cloud-init may not have finished: `scripts/vm-exec.sh $VM_SPOKE "cloud-init status --wait; apt-get install -y cifs-utils"` |
-| `share-rm create` fails: shared key access prohibited | An org policy blocks shared keys. Use a personal/test subscription |
+| `share-rm create` authorization error | Check Contributor permissions on the resource group and the `$SA` value |
+| Policy denies share creation | Inspect the policy condition in the error and contact your administrator. Do not disable shared key / public access restrictions |
+| Cannot list files from the internet | Expected: public data access remains blocked |
+
+> 💡 Actual file data operations are a separate extension. [Azure Files REST API with Microsoft Entra ID authentication](https://learn.microsoft.com/en-us/azure/storage/files/authorize-oauth-rest) requires data-plane RBAC roles and permission to assign them.
 
 ➡️ Next: [Module 4. Azure Backup](04-azure-backup.md)

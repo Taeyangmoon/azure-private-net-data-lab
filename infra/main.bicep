@@ -128,11 +128,11 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
     allowBlobPublicAccess: false
-    allowSharedKeyAccess: true
-    // 모듈 2에서 차단하기 전까지는 공용 인터넷에서 접근 가능한 상태 (비교용)
-    publicNetworkAccess: 'Enabled'
+    // 실습 내내 공유 키와 공용 데이터 접근을 차단합니다. 모듈 2에서 프라이빗 경로를 연결합니다.
+    allowSharedKeyAccess: false
+    publicNetworkAccess: 'Disabled'
     networkAcls: {
-      defaultAction: 'Allow'
+      defaultAction: 'Deny'
       bypass: 'AzureServices'
     }
   }

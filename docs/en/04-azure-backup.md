@@ -4,18 +4,22 @@
 
 ## 🎯 Goal
 
-Protect the Azure Files share with **Azure Backup**, then **delete a file by mistake and restore it**.
+Protect an empty Azure Files share with **Snapshot backup**, then verify **completed backup jobs and recovery points**.
+
+> 📌 This module teaches backup management. It does not write/delete files or **verify restoration of file contents**.
 
 > 🧠 **Key concepts**
-> - **Recovery Services vault**: the container that stores backup data and policies.
+> - **Recovery Services vault**: the container managing this lab's backup policies, protected items, and recovery points.
 > - **Backup policy**: defines when (schedule) and how long (retention) to back up.
-> - **Recovery point**: a snapshot at backup time. Azure Files backup is **share-snapshot based**, so it's fast and moves no data.
-> - The backup service reaches storage as a **trusted Azure service**. That's why we kept `--bypass AzureServices` in Module 2. Public internet access is still blocked.
+> - **Recovery point**: information used to return to a backup time. This lab's Snapshot backup uses **share snapshots** without moving data into the vault.
+> - The **Snapshot tier** keeps snapshots in the storage account; the vault manages policies and recovery points. This differs from Vaulted backup, which copies data into the vault.
+> - Do not change shared key or public access settings. Backup requests go to Azure Backup through the management plane. If additional organizational policies block a job, inspect the error and stop.
 
 ## 📝 Steps
 
 ```bash
 source scripts/env.sh
+: "${SA:?Deploy Module 0 first}"
 ```
 
 ### 1. Create the vault
@@ -26,23 +30,29 @@ az provider register -n Microsoft.RecoveryServices --wait
 
 az backup vault create -g $RG -n $VAULT -l $LOCATION -o none
 
-# Lab cost/cleanup convenience: LRS redundancy, soft delete off (※ keep it ON in production)
-az backup vault backup-properties set -g $RG -n $VAULT \
+# LRS for the lab. Preserve soft-delete defaults / organizational policy.
+az backup vault update -g $RG -n $VAULT \
   --backup-storage-redundancy LocallyRedundant -o none
-az backup vault backup-properties set -g $RG -n $VAULT \
-  --soft-delete-feature-state Disable -o none
+az backup vault show -g $RG -n $VAULT \
+  --query "{Redundancy:properties.redundancySettings.standardTierStorageRedundancy, SoftDelete:properties.securitySettings.softDeleteSettings.softDeleteState}" -o table
 ```
 
-> ⚠️ Redundancy (LRS/GRS) can only be changed **before registering any protected item**. With soft delete on, backup data can linger for 14 days after deletion, which may block deleting the vault during cleanup. Depending on your subscription/policy you may see `Vault's current Soft Delete State is AlwaysOn. This cannot be modified.` — that's fine, just continue.
+> 📌 Set redundancy **before registering protected items**. `SoftDelete=AlwaysON` is normal; do not attempt to disable it. Storage account share soft delete and vault soft delete are separate settings. [Soft-delete scope](https://learn.microsoft.com/en-us/azure/backup/secure-by-default)
 
 ### 2. Create a backup policy
 
-`infra/backup-policy.json` defines **a daily backup at 02:00 UTC, retained for 7 days**.
+`infra/backup-policy.json` defines the **Snapshot tier, daily backup at 02:00 UTC, and 7-day retention**. Do not switch to the Vaulted tier in this lab.
+
+CLI policies use `retentionPolicy` for Snapshot and `vaultRetentionPolicy` for Vaulted backup. [Official policy definitions](https://learn.microsoft.com/en-us/azure/backup/manage-afs-backup-cli#create-a-backup-policy)
 
 ```bash
 az backup policy create -g $RG -v $VAULT -n policy-daily-files \
   --backup-management-type AzureStorage --workload-type AzureFileShare \
   --policy infra/backup-policy.json -o table
+az backup policy show -g $RG -v $VAULT -n policy-daily-files \
+  --query "{Schedule:properties.schedulePolicy.scheduleRunFrequency, TimeZone:properties.timeZone, RetentionDays:properties.retentionPolicy.dailySchedule.retentionDuration.count}" -o table
+test "$(az backup policy show -g $RG -v $VAULT -n policy-daily-files \
+  --query 'properties.vaultRetentionPolicy == `null` && properties.retentionPolicy.dailySchedule.retentionDuration.count == `7`' -o tsv)" = true
 ```
 
 ### 3. Start protecting the file share
@@ -58,85 +68,68 @@ Takes 1–3 minutes. Check the status:
 ```bash
 az backup item list -g $RG -v $VAULT --backup-management-type AzureStorage \
   --workload-type AzureFileShare \
-  --query "[].{Share:properties.friendlyName, Policy:properties.policyName, Status:properties.protectionStatus}" -o table
+  --query "[].{Share:properties.friendlyName, State:properties.protectionState, PolicyId:properties.policyId}" -o table
 ```
+
+You may see `IRPending` before the first backup. After the next step completes, check again for `Protected`.
 
 ### 4. On-demand backup
 
-Don't wait for the schedule; back up now. The current files (`budget-2026.txt`, etc.) go into the recovery point.
+Do not wait for the schedule; create a snapshot of the **empty share** now.
 
 ```bash
+if [ "$(uname -s)" = Darwin ]; then
+  RETAIN_UNTIL=$(date -u -v+7d +%d-%m-%Y)
+else
+  RETAIN_UNTIL=$(date -u -d '+7 days' +%d-%m-%Y)
+fi
+
 JOB=$(az backup protection backup-now -g $RG -v $VAULT \
   --container-name $SA --item-name $SHARE \
   --backup-management-type AzureStorage --workload-type AzureFileShare \
-  --retain-until $(date -d '+7 days' +%d-%m-%Y) --query name -o tsv)
+  --retain-until "$RETAIN_UNTIL" --query name -o tsv)
+: "${JOB:?No backup job ID returned}"
 
-az backup job wait -g $RG -v $VAULT -n $JOB
+az backup job wait -g $RG -v $VAULT -n $JOB --timeout 1800 -o none
 az backup job show -g $RG -v $VAULT -n $JOB --query "{Operation:properties.operation, Status:properties.status}" -o table
+test "$(az backup job show -g $RG -v $VAULT -n $JOB --query properties.status -o tsv)" = Completed
 ```
 
 👉 Status should be **Completed**. (It can take a few minutes.)
 
-List the recovery points:
+### 5. Inspect recovery points
+
+Expect at least one recovery point with a name and creation time.
 
 ```bash
 az backup recoverypoint list -g $RG -v $VAULT -c $SA -i $SHARE \
   --backup-management-type AzureStorage --workload-type AzureFileShare \
-  --query "[].{Name:name, Time:properties.recoveryPointTime}" -o table
-```
-
-### 5. Disaster strikes! Delete a file 💥
-
-```bash
-scripts/vm-share.sh "rm /mnt/corpfiles/finance/budget-2026.txt; ls -l /mnt/corpfiles/finance"
-```
-
-👉 The `finance` folder is empty. The important budget file is gone!
-
-### 6. Restore ♻️
-
-Pick the latest recovery point and restore **just that file** to its original location.
-
-```bash
-RP=$(az backup recoverypoint list -g $RG -v $VAULT -c $SA -i $SHARE \
+  --query "sort_by(@, &properties.recoveryPointTime)[].{Name:name, Time:properties.recoveryPointTime}" -o table
+test "$(az backup recoverypoint list -g $RG -v $VAULT -c $SA -i $SHARE \
   --backup-management-type AzureStorage --workload-type AzureFileShare \
-  --query "[0].name" -o tsv)
-echo "Recovery point: $RP"
-
-RJOB=$(az backup restore restore-azurefiles -g $RG -v $VAULT \
-  --rp-name $RP --container-name $SA --item-name $SHARE \
-  --restore-mode OriginalLocation --resolve-conflict Overwrite \
-  --source-file-type File --source-file-path finance/budget-2026.txt \
-  --query name -o tsv)
-
-az backup job wait -g $RG -v $VAULT -n $RJOB
+  --query 'length(@)' -o tsv)" -ge 1
+az backup item list -g $RG -v $VAULT --backup-management-type AzureStorage \
+  --workload-type AzureFileShare \
+  --query "[].{Share:properties.friendlyName, State:properties.protectionState, PolicyId:properties.policyId}" -o table
 ```
 
-Verify the result. (Because of the `actimeo=30` mount option it can take up to ~30 s to show up.)
+👉 You connected **share → backup policy → completed job → recovery point**. An empty share can have recovery points, but this does not prove restoration of file contents.
 
-```bash
-sleep 30
-scripts/vm-share.sh "ls -l /mnt/corpfiles/finance; cat /mnt/corpfiles/finance/budget-2026.txt"
-```
-
-👉 If you see `2026 budget - confidential` again, you're done! 🎉
-
-> 💡 **Try it in the portal too**: Azure Portal ▸ Recovery Services vault `rsv-pvtlab` ▸ **Backup items ▸ Azure Storage (Azure Files)** ▸ `corpfiles` ▸ **File Recovery / Restore Share**.
+> 💡 You can inspect **Backup items ▸ Azure Storage (Azure Files)** in vault `rsv-pvtlab` in the portal. Creating/deleting actual files and verifying restored contents is a separate extension requiring identity-based data access.
 
 ## ✅ Checklist
 
-- [ ] Protected item is healthy (`Healthy`)
+- [ ] Share protection state is `Protected`
 - [ ] On-demand backup job `Completed`, at least 1 recovery point
-- [ ] Deleted file restored
+- [ ] Shared keys/public access remain disabled and vault soft-delete policy is preserved
 
 ## 🛠️ Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | `MissingSubscriptionRegistration` | Run `az provider register -n Microsoft.RecoveryServices --wait` and retry |
-| `date -d` error (e.g. macOS) | Works in the Codespace (Linux). Otherwise pass e.g. `--retain-until 31-12-2030` (`d-m-Y`) |
-| Storage access error when enabling protection | Check Module 2's `--bypass AzureServices` is applied: `az storage account show -g $RG -n $SA --query networkRuleSet.bypass` |
-| `backup-properties set` error | Redundancy can't change once an item is protected. Use a freshly created vault |
-| File not visible after restore | Wait 30 s and rerun `scripts/vm-share.sh "ls /mnt/corpfiles/finance"` |
+| Backup/restore job is `Failed` | Inspect the errors with `az backup job show -g $RG -v $VAULT -n <job ID> -o json`. Finishing `job wait` alone does not mean success |
+| Storage access error when enabling protection | Check Module 0's `networkRuleSet.bypass=AzureServices` and this lab's Snapshot policy definition. Stop and contact your administrator if other policies block it. Do not enable shared keys or public access |
+| Redundancy update error | Configure LRS before registering protected items |
 
 ➡️ Next: [Cleanup](05-cleanup.md)

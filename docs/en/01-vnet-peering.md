@@ -32,6 +32,8 @@ scripts/vm-exec.sh $VM_SPOKE "ping -c 3 -W 2 $HUB_IP"
 
 👉 You'll see `100% packet loss` — the VNets aren't connected.
 
+Exit code `1` is the expected ping failure at this step. The post-peering tests must instead exit with `0`.
+
 ### 2. Create the peering (both directions)
 
 ```bash

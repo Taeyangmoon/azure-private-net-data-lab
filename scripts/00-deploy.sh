@@ -25,15 +25,18 @@ az deployment group create -g "$RG" -n main \
   -p sshPublicKey="$(cat ~/.ssh/lab_key.pub)" ${VM_SIZE:+vmSize="$VM_SIZE"} \
   --query 'properties.outputs' -o jsonc
 
-SA_NAME=$(az storage account list -g "$RG" --query '[0].name' -o tsv)
-if [ "$(az storage account show -g "$RG" -n "$SA_NAME" --query allowSharedKeyAccess -o tsv)" = "false" ]; then
-  echo "⚠️  이 구독은 스토리지 '공유 키 액세스'가 정책으로 꺼져 있습니다. 모듈 3(SMB 마운트)이 실패합니다." >&2
-  echo "⚠️  Shared key access is disabled by policy in this subscription. Module 3 (SMB mount) will fail." >&2
+SA_NAME=$(az deployment group show -g "$RG" -n main --query properties.outputs.storageAccountName.value -o tsv)
+SECURITY_OK=$(az storage account show -g "$RG" -n "$SA_NAME" \
+  --query "allowSharedKeyAccess == \`false\` && publicNetworkAccess == 'Disabled' && networkRuleSet.defaultAction == 'Deny'" -o tsv)
+if [ "$SECURITY_OK" != true ]; then
+  echo "❌ 스토리지 보안 설정을 확인하세요: 공유 키=false, 공용 접근=Disabled, 기본 동작=Deny가 필요합니다." >&2
+  echo "❌ Expected storage settings: shared key=false, public access=Disabled, default action=Deny." >&2
+  exit 1
 fi
 
 echo "▶ 4/4 VM 초기화(cloud-init) 대기 / Waiting for VM cloud-init"
 for vm in "$VM_HUB" "$VM_SPOKE"; do
-  scripts/vm-exec.sh "$vm" "cloud-init status --wait" | tail -n 3
+  scripts/vm-exec.sh "$vm" "timeout 600 cloud-init status --wait; command -v curl; command -v nslookup; command -v nc"
 done
 
 echo "✅ 완료 / Done. 다음: docs/ko/01-vnet-peering.md (EN: docs/en/01-vnet-peering.md)"
